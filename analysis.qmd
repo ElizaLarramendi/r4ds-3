@@ -1,4 +1,87 @@
 ---
 title: "Analyzing School District Reading Scores"
 author: "Eliza"
+execute:
+  echo: false
 ---
+
+```{r}
+#| message: false
+library(tidyverse)
+library(DBI)
+library(duckdb)
+library(dbplyr)
+```
+
+```{r}
+con <- dbConnect(duckdb(), dbdir = "data/seda_2025.duckdb", read_only = TRUE)
+dbplyr_dist <- tbl(con, "district_scores")
+```
+
+```{r}
+#| cache: true
+#| cache.extra: !expr file.mtime("data/seda_2025.duckdb")
+score_change <- dbplyr_dist |>
+  filter(year %in% c(2015, 2023)) |>
+  group_by(district_id, district_name, state) |>
+  summarise(
+    score_2015 = max(case_when(year == 2015 ~ rla_score)),
+    score_2023 = max(case_when(year == 2023 ~ rla_score)),
+    .groups = "drop"
+  ) |>
+  filter(!is.na(score_2015), !is.na(score_2023)) |>
+  mutate(score_change = score_2023 - score_2015) |>
+  collect()
+state_change <- tbl(con, "state_scores") |>
+  filter(year %in% c(2015, 2023)) |>
+  group_by(stateabb, state_name) |>
+  summarise(
+    score_2015 = max(case_when(year == 2015 ~ rla_score)),
+    score_2023 = max(case_when(year == 2023 ~ rla_score)),
+    .groups = "drop"
+  ) |>
+  filter(!is.na(score_2015), !is.na(score_2023)) |>
+  mutate(score_change = score_2023 - score_2015) |>
+  collect()
+```
+
+```{r}
+score_change |>
+  mutate(
+    rla_change = score_change,
+    change_direction = if_else(rla_change > 0, "Positive", "Negative or zero")
+  ) |>
+  ggplot(aes(x = rla_change, fill = change_direction)) +
+  geom_histogram() +
+  geom_vline(xintercept = 0) +
+  labs(
+    title = "Distribution of District Reading Score Changes",
+    subtitle = paste("Districts with data in both years:", nrow(score_change)),
+    caption = "Change is the 2023 score minus the 2015 score.",
+    x = "Reading score change",
+    y = "Number of districts",
+    fill = "Change"
+  )
+```
+
+```{r}
+state_change |>
+  mutate(
+    state_name = fct_reorder(state_name, score_2023),
+    change_direction = if_else(score_change > 0, "Improved", "Declined")
+  ) |>
+  ggplot(aes(y = state_name)) +
+  geom_segment(
+    aes(x = score_2015, xend = score_2023, yend = state_name, color = change_direction),
+    arrow = arrow(length = unit(0.15, "inches"))
+  ) +
+  geom_point(aes(x = score_2015), color = "gray") +
+  labs(
+    title = "State Reading Score Changes, 2015 to 2023",
+    subtitle = "States are ordered by their 2023 reading score; gray dots mark 2015",
+    caption = "Arrows point from 2015 to 2023. Positive change indicates improvement.",
+    x = "Reading score",
+    y = NULL,
+    color = "Direction"
+  )
+```
